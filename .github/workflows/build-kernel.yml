@@ -1,8 +1,8 @@
-name: Build BW21 nommu RISC-V Linux (virtio-blk + virtio-net)
+name: build-kernel
 
 on:
   push:
-    branches: [ main, master ]
+    branches: [main, master]
   workflow_dispatch:
 
 jobs:
@@ -10,82 +10,55 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 180
     steps:
+      - name: Checkout this repo
+        uses: actions/checkout@v4
+
       - name: Install host build deps
         run: |
           sudo apt-get update
           sudo apt-get install -y build-essential git wget cpio unzip rsync bc \
             libncurses-dev flex bison libssl-dev file python3 device-tree-compiler
 
-      - name: Clone cnlohr buildroot (has nommu rv32 + minirv32 hvc patches)
+      - name: Clone cnlohr buildroot + mini-rv32ima
         run: |
           git clone --depth 1 https://github.com/cnlohr/buildroot.git buildroot
           git clone --depth 1 https://github.com/cnlohr/mini-rv32ima.git mini-rv32ima
 
       - name: Stage configs
         run: |
-          cp mini-rv32ima/configs/buildroot_config       buildroot/.config
-          cp mini-rv32ima/configs/custom_kernel_config   buildroot/kernel_config
-          cp mini-rv32ima/configs/busybox_config         buildroot/busybox_config
-          cp mini-rv32ima/configs/uclibc_config          buildroot/uclibc_config
-          cp mini-rv32ima/configs/uclibc_config          buildroot/uclibc_config_extra
+          cp mini-rv32ima/configs/buildroot_config     buildroot/.config
+          cp mini-rv32ima/configs/custom_kernel_config buildroot/kernel_config
+          cp mini-rv32ima/configs/busybox_config       buildroot/busybox_config
+          cp mini-rv32ima/configs/uclibc_config        buildroot/uclibc_config
+          cp mini-rv32ima/configs/uclibc_config        buildroot/uclibc_config_extra
+          # disable qemu post-image script (fails on CI, we only need Image)
+          sed -i 's#^BR2_ROOTFS_POST_IMAGE_SCRIPT=.*#BR2_ROOTFS_POST_IMAGE_SCRIPT=""#' buildroot/.config
+          sed -i 's#^BR2_ROOTFS_POST_SCRIPT_ARGS=.*#BR2_ROOTFS_POST_SCRIPT_ARGS=""#'  buildroot/.config
+          # append our virtio/block/net/fs options onto the kernel config
+          cat kernel_fragment.config >> buildroot/kernel_config
+          echo "---- staged ----"
+          tail -n 40 buildroot/kernel_config
 
-      - name: Append virtio/block/net kernel options
-        run: |
-          cat >> buildroot/kernel_config <<'EOF'
-# ---- added for BW21: block + virtio-blk ----
-CONFIG_BLOCK=y
-CONFIG_BLK_DEV=y
-CONFIG_VIRTIO_BLK=y
-# ---- virtio-net + full TCP/IP ----
-CONFIG_NET=y
-CONFIG_PACKET=y
-CONFIG_UNIX=y
-CONFIG_INET=y
-CONFIG_IP_PNP=y
-CONFIG_IP_PNP_DHCP=y
-CONFIG_VIRTIO_NET=y
-CONFIG_NETDEVICES=y
-CONFIG_NET_CORE=y
-# ---- filesystems on the SD disk ----
-CONFIG_EXT4_FS=y
-CONFIG_EXT2_FS=y
-CONFIG_VFAT_FS=y
-CONFIG_FAT_FS=y
-CONFIG_MSDOS_FS=y
-CONFIG_NLS=y
-CONFIG_NLS_CODEPAGE_437=y
-CONFIG_NLS_ISO8859_1=y
-CONFIG_NLS_UTF8=y
-# ---- misc the virtio mmio bus needs ----
-CONFIG_VIRTIO=y
-CONFIG_VIRTIO_MENU=y
-CONFIG_VIRTIO_MMIO=y
-CONFIG_VIRTIO_MMIO_CMDLINE_DEVICES=y
-EOF
-          echo "appended."
-
-      - name: Build (buildroot -> kernel Image + rootfs)
+      - name: Build
         run: |
           cd buildroot
           make olddefconfig || true
-          # BR2_JLEVEL=0 in config means use all cores
-          make 2>&1 | tail -n 120 || (echo "=== build tail ==="; tail -n 200 output/build/linux-*/.config 2>/dev/null; exit 1)
+          make
 
-      - name: Locate Image
+      - name: List images
+        if: always()
         run: |
-          find buildroot/output/images -maxdepth 2 -type f | sort
           ls -la buildroot/output/images/ || true
+          find buildroot/output/images -type f 2>/dev/null | sort || true
 
       - name: Upload kernel Image
         uses: actions/upload-artifact@v4
         with:
           name: bw21-linux-image
-          path: |
-            buildroot/output/images/Image
-            buildroot/output/images/*.dtb
+          path: buildroot/output/images/Image
           if-no-files-found: warn
 
-      - name: Dump kernel .config for reference
+      - name: Upload used kernel .config
         if: always()
         uses: actions/upload-artifact@v4
         with:
