@@ -5,7 +5,7 @@
     compatible = "riscv-minimal-nommu";
     model = "BW21 RV32IMA virtual machine";
     chosen {
-        bootargs = "earlycon=uart8250,mmio,0x10000000 console=ttyS0";
+        bootargs = "earlycon=uart8250,mmio,0x10000000 console=ttyS0 rdinit=/bin/sh loglevel=8";
         stdout-path = "/soc/serial@10000000";
     };
     // Firmware reserves the final 64 KiB for the DTB; 16 MiB guest RAM.
@@ -41,6 +41,8 @@
             compatible = "ns16550a";
             reg = <0x10000000 0x100>;
             clock-frequency = <16777216>;
+            interrupt-parent = <&plic>;
+            interrupts = <3>;
         };
         plic: interrupt-controller@c000000 {
             compatible = "sifive,plic-1.0.0", "riscv,plic0";
