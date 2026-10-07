@@ -1,26 +1,27 @@
-# BW21 Linux extension status
+# BW21-CBV-Kit nommu Linux — current status
 
-## User requirement
-Linux must access the whole existing FAT32 SD partition directly, not a disk-image file. Intended guest device is `/dev/vda1`, mounted e.g. at `/mnt/sd`.
+## Required target
+Linux must access the entire existing FAT32 SD partition directly (no disk image), expected as `/dev/vda1` mounted at `/mnt/sd`.
 
-## Verified facts
-- Repo: `tianzi5555/bw21-linux-kernel`.
-- GitHub Actions run #2 at commit `d286c374e81fbe981ca8a1469d9342589cf5642a` completed successfully in ~24 minutes and uploaded `bw21-linux-image`, 2,163,613 bytes. This only proves Buildroot produced an Image; the final kernel config has NOT yet been verified and the image is not proven to boot with virtio.
-- BW21 SDK header declares `SD_Init`, `SD_DeInit`, `SD_GetCapacity`, `SD_ReadBlocks`, and `SD_WriteBlocks` in `system/component/soc/8735b/app/file_system/drivers/sdio/realtek/sdio_host/inc/sd.h`.
-- The current Linux sketch now contains a raw-sector backend wrapper (512-byte sectors, bounds checking, aligned 8-sector bounce buffer, explicit FatFS/raw ownership handoff) using these APIs. It compiles for AMB82-MINI, exit 0; warnings say the wrappers are unused because the virtio layer is not implemented. This is compile-only; no hardware sector I/O test has been done.
-- mini-rv32ima currently has a flat guest RAM map and the platform wrapper handles UART, CLINT and SYSCON only. Existing DTB lacks virtio devices and a PLIC/external interrupt controller.
+## Verified
+- Repo `tianzi5555/bw21-linux-kernel` exists.
+- GitHub Actions run #2 at commit `d286c374e81fbe981ca8a1469d9342589cf5642a` succeeded and uploaded a 2,163,613-byte `bw21-linux-image` artifact. Final config was not inspected, and this image has not been shown to boot with virtio.
+- BW21 SDK declares `SD_Init`, `SD_DeInit`, `SD_GetCapacity`, `SD_ReadBlocks`, and `SD_WriteBlocks` in the RTL8735B SDIO `sd.h`.
+- Current Arduino sketch has a bounds-checked 512-byte raw SD sector backend wrapper, aligned 8-sector bounce buffer, and guards against FatFS/raw ownership overlap. It compiles for AMB82-MINI, exit 0. Functions still warn unused because no virtio device calls them. No board sector-I/O test.
+- mini-rv32ima platform wrapper currently emulates only UART, CLINT and SYSCON MMIO; current DTB has no virtio node/PLIC. Local `mini-rv32ima.h` now has an optional `MINIRV32_EXTERNAL_IRQ_PENDING(state)` hook that sets `mip.MEIP`, wakes WFI, and prioritizes MEIP before MTIP. AMB82 sketch compiles with the hook defaulting false (Arduino CLI EXIT 0), so existing behavior is unchanged. No PLIC source or runtime MEIP test exists yet.
 
-## Local, not yet pushed
-- `kernel_fragment.config` now also requests `CONFIG_PARTITION_ADVANCED`, `CONFIG_MSDOS_PARTITION`, and `CONFIG_EFI_PARTITION` so the FAT partition can enumerate as `/dev/vda1`.
-- Workflow now includes a final `.config` assertion requiring BLOCK, VIRTIO_BLK, NET, INET, VIRTIO_NET, VIRTIO_MMIO, VFAT_FS, and MSDOS_PARTITION.
-- These changes are locally committed as `701205a` plus an uncommitted workflow edit. Push failed because TLS through the configured proxy at `127.0.0.1:7890` is failing. Do not bypass the proxy.
+## Local commits not pushed
+- Commit `701205a` adds MBR/GPT partition config and status notes.
+- Commit `1dc69b0` adds kernel final-config assertions; workflow+fragment changes include block/net/FAT options.
+- Proxy at `127.0.0.1:7890` accepts TCP but GitHub TLS via Schannel/OpenSSL fails with EOF. Do not bypass proxy; push is blocked until its routing/TLS is fixed.
 
-## Remaining engineering work
-1. Push corrected kernel config/workflow when proxied TLS works; verify final `.config` and download the artifact.
-2. Implement virtio-mmio block transport in mini-rv32ima, descriptor/avail/used queues, SD raw-sector backend, and correct host-FATFS-to-guest handoff (never concurrent access).
-3. Add interrupt delivery and matching PLIC/virtio device tree. Current emulator only injects CLINT timer interrupts.
-4. Implement virtio-net and bridge guest Ethernet to firmware Wi-Fi; provide a defined firmware control path for Wi-Fi scan/connect (Linux cannot directly control the RTL8735B radio).
-5. Compile firmware and test with actual board. User must be explicitly asked to use hardware download mode before each flash; user must remove SD and write new kernel with reader.
+## Remaining
+1. Push local config/workflow fixes through the required proxy; verify final `.config` and retrieve the artifact.
+2. Implement virtio-mmio block registers/queues/descriptor chains and connect them to raw SD sector functions.
+3. Implement external interrupt delivery/PLIC and matching DTB nodes.
+4. Implement virtio-net plus firmware Wi-Fi bridge and scan/connect control path.
+5. Compile, then test on hardware. User must manually enter hardware download mode before each firmware flash, and remove SD/write Image with card reader. Never have FatFS and guest raw block I/O active simultaneously.
+6. Validate a FAT32 mount/read/write round trip and network ping before reporting done.
 
 ## Safety
-Do not tell user to mount/write the FAT partition until block I/O and clean handoff are validated; incorrect raw-sector writes can corrupt the filesystem.
+Do not tell user to mount/write SD from Linux until virtio block, partition enumeration, and ownership handoff are validated. The currently compiled firmware is not ready to flash for this feature.
