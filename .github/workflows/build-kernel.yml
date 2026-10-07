@@ -58,6 +58,10 @@ jobs:
           grep -qx 'BR2_LINUX_KERNEL_CUSTOM_CONFIG_FILE="kernel_config"' .config
           make
 
+      # SDK depends on world and can relink Image with a regenerated initramfs.
+      - name: Export Linux host SDK
+        run: make -C buildroot sdk
+
       - name: Verify requested kernel options survived Kconfig
         run: |
           cfg=$(find buildroot/output/build -path '*/linux-*/.config' -print -quit)
@@ -90,9 +94,6 @@ jobs:
               (cd buildroot/output/images && sha256sum "$image") >> evidence/SHA256SUMS
             fi
           done
-
-      - name: Export Linux host SDK
-        run: make -C buildroot sdk
 
       - name: List images
         if: always()

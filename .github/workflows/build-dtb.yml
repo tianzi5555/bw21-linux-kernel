@@ -1,0 +1,30 @@
+name: build-dtb
+
+on:
+  push:
+    branches: [main, master]
+    paths: [bw21.dts, .github/workflows/build-dtb.yml]
+  workflow_dispatch:
+
+jobs:
+  dtb:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install device tree compiler
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y device-tree-compiler
+      - name: Compile and inspect board device tree
+        run: |
+          mkdir -p dtb-artifact
+          dtc -I dts -O dtb -o dtb-artifact/bw21.dtb bw21.dts
+          dtc -I dtb -O dts -o dtb-artifact/bw21-decoded.dts dtb-artifact/bw21.dtb
+          cp bw21.dts dtb-artifact/
+          (cd dtb-artifact && sha256sum bw21.dtb > SHA256SUMS)
+          printf 'run=%s\nsha=%s\nhardware_verified=false\n' "$GITHUB_RUN_ID" "$GITHUB_SHA" > dtb-artifact/status.txt
+      - uses: actions/upload-artifact@v4
+        with:
+          name: bw21-board-dtb
+          path: dtb-artifact/
+          if-no-files-found: error
