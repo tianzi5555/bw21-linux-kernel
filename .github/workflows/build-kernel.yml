@@ -45,6 +45,16 @@ jobs:
           make olddefconfig || true
           make
 
+      - name: Verify requested kernel options survived Kconfig
+        run: |
+          cfg=$(find buildroot/output/build -path '*/linux-*/.config' -print -quit)
+          test -n "$cfg"
+          echo "Kernel config: $cfg"
+          for sym in CONFIG_BLOCK CONFIG_VIRTIO_BLK CONFIG_NET CONFIG_INET CONFIG_VIRTIO_NET CONFIG_VIRTIO_MMIO CONFIG_VFAT_FS CONFIG_MSDOS_PARTITION; do
+            grep -qx "$sym=y" "$cfg" || { echo "Missing required kernel option: $sym"; exit 1; }
+          done
+          grep -E '^(CONFIG_(BLOCK|VIRTIO_BLK|NET|INET|VIRTIO_NET|VIRTIO_MMIO|VFAT_FS|MSDOS_PARTITION))=' "$cfg"
+
       - name: List images
         if: always()
         run: |
