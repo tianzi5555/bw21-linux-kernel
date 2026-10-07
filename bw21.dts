@@ -1,0 +1,82 @@
+/dts-v1/;
+/ {
+    #address-cells = <1>;
+    #size-cells = <1>;
+    compatible = "riscv-minimal-nommu";
+    model = "BW21 RV32IMA virtual machine";
+    chosen {
+        bootargs = "earlycon=uart8250,mmio,0x10000000 console=ttyS0";
+        stdout-path = "/soc/serial@10000000";
+    };
+    // Firmware reserves the final 64 KiB for the DTB; 16 MiB guest RAM.
+    memory@80000000 {
+        device_type = "memory";
+        reg = <0x80000000 0x00ff0000>;
+    };
+    cpus {
+        #address-cells = <1>;
+        #size-cells = <0>;
+        timebase-frequency = <1000000>;
+        cpu@0 {
+            device_type = "cpu";
+            reg = <0>;
+            status = "okay";
+            compatible = "riscv";
+            riscv,isa = "rv32ima";
+            mmu-type = "riscv,none";
+            intc: interrupt-controller {
+                #interrupt-cells = <1>;
+                #address-cells = <0>;
+                interrupt-controller;
+                compatible = "riscv,cpu-intc";
+            };
+        };
+    };
+    soc {
+        #address-cells = <1>;
+        #size-cells = <1>;
+        compatible = "simple-bus";
+        ranges;
+        serial@10000000 {
+            compatible = "ns16550a";
+            reg = <0x10000000 0x100>;
+            clock-frequency = <16777216>;
+        };
+        plic: interrupt-controller@c000000 {
+            compatible = "sifive,plic-1.0.0", "riscv,plic0";
+            reg = <0x0c000000 0x00400000>;
+            #interrupt-cells = <1>;
+            #address-cells = <0>;
+            interrupt-controller;
+            interrupts-extended = <&intc 11>;
+            riscv,ndev = <8>;
+        };
+        virtio@10001000 {
+            compatible = "virtio,mmio";
+            reg = <0x10001000 0x1000>;
+            interrupt-parent = <&plic>;
+            interrupts = <1>;
+        };
+        clint@11000000 {
+            compatible = "sifive,clint0", "riscv,clint0";
+            reg = <0x11000000 0x10000>;
+            interrupts-extended = <&intc 3 &intc 7>;
+        };
+        syscon: syscon@11100000 {
+            compatible = "syscon";
+            reg = <0x11100000 0x1000>;
+        };
+        poweroff {
+            compatible = "syscon-poweroff";
+            regmap = <&syscon>;
+            offset = <0>;
+            value = <0x5555>;
+        };
+        reboot {
+            compatible = "syscon-reboot";
+            regmap = <&syscon>;
+            offset = <0>;
+            value = <0x7777>;
+        };
+    };
+};

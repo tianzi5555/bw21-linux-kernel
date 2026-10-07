@@ -5,6 +5,10 @@ on:
     branches: [main, master]
   workflow_dispatch:
 
+concurrency:
+  group: kernel-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   build:
     runs-on: ubuntu-latest
@@ -21,8 +25,14 @@ jobs:
 
       - name: Clone cnlohr buildroot + mini-rv32ima
         run: |
-          git clone --depth 1 https://github.com/cnlohr/buildroot.git buildroot
-          git clone --depth 1 https://github.com/cnlohr/mini-rv32ima.git mini-rv32ima
+          git init buildroot
+          git -C buildroot remote add origin https://github.com/cnlohr/buildroot.git
+          git -C buildroot fetch --depth 1 origin 851edd247f5e2e8e10f943c52218bc54c657688f
+          git -C buildroot checkout FETCH_HEAD
+          git init mini-rv32ima
+          git -C mini-rv32ima remote add origin https://github.com/cnlohr/mini-rv32ima.git
+          git -C mini-rv32ima fetch --depth 1 origin 84858f58cb41899705e2ff2d6ee3b2d5c0795bfe
+          git -C mini-rv32ima checkout FETCH_HEAD
 
       - name: Stage configs
         run: |
@@ -34,7 +44,8 @@ jobs:
           # disable qemu post-image script (fails on CI, we only need Image)
           sed -i 's#^BR2_ROOTFS_POST_IMAGE_SCRIPT=.*#BR2_ROOTFS_POST_IMAGE_SCRIPT=""#' buildroot/.config
           sed -i 's#^BR2_ROOTFS_POST_SCRIPT_ARGS=.*#BR2_ROOTFS_POST_SCRIPT_ARGS=""#'  buildroot/.config
-          # append our virtio/block/net/fs options onto the kernel config
+          # Bind Buildroot to the exact config that receives our fragment.
+          sed -i 's#^BR2_LINUX_KERNEL_CUSTOM_CONFIG_FILE=.*#BR2_LINUX_KERNEL_CUSTOM_CONFIG_FILE="kernel_config"#' buildroot/.config
           cat kernel_fragment.config >> buildroot/kernel_config
           echo "---- staged ----"
           tail -n 40 buildroot/kernel_config
@@ -42,7 +53,9 @@ jobs:
       - name: Build
         run: |
           cd buildroot
-          make olddefconfig || true
+          make olddefconfig
+          grep -qx 'BR2_LINUX_KERNEL_USE_CUSTOM_CONFIG=y' .config
+          grep -qx 'BR2_LINUX_KERNEL_CUSTOM_CONFIG_FILE="kernel_config"' .config
           make
 
       - name: Verify requested kernel options survived Kconfig
@@ -50,10 +63,36 @@ jobs:
           cfg=$(find buildroot/output/build -path '*/linux-*/.config' -print -quit)
           test -n "$cfg"
           echo "Kernel config: $cfg"
-          for sym in CONFIG_BLOCK CONFIG_VIRTIO_BLK CONFIG_NET CONFIG_INET CONFIG_VIRTIO_NET CONFIG_VIRTIO_MMIO CONFIG_VFAT_FS CONFIG_MSDOS_PARTITION; do
+          for sym in CONFIG_RISCV CONFIG_ARCH_RV32I CONFIG_RISCV_M_MODE CONFIG_SIFIVE_PLIC CONFIG_BLOCK CONFIG_VIRTIO_BLK CONFIG_NET CONFIG_INET CONFIG_PACKET CONFIG_UNIX CONFIG_IP_PNP CONFIG_IP_PNP_DHCP CONFIG_VIRTIO_NET CONFIG_VIRTIO_MMIO CONFIG_FAT_FS CONFIG_VFAT_FS CONFIG_MSDOS_FS CONFIG_MSDOS_PARTITION; do
             grep -qx "$sym=y" "$cfg" || { echo "Missing required kernel option: $sym"; exit 1; }
           done
-          grep -E '^(CONFIG_(BLOCK|VIRTIO_BLK|NET|INET|VIRTIO_NET|VIRTIO_MMIO|VFAT_FS|MSDOS_PARTITION))=' "$cfg"
+          ! grep -qx 'CONFIG_64BIT=y' "$cfg"
+          for sym in CONFIG_MMU CONFIG_SMP CONFIG_RISCV_ISA_C CONFIG_FPU; do
+            grep -qx "# $sym is not set" "$cfg" || { echo "Incompatible kernel option: $sym"; exit 1; }
+          done
+          grep -E '^(CONFIG_(RISCV|ARCH_RV32I|RISCV_M_MODE|SIFIVE_PLIC|BLOCK|VIRTIO_BLK|NET|INET|VIRTIO_NET|VIRTIO_MMIO|FAT_FS|VFAT_FS|MSDOS_FS|MSDOS_PARTITION))=' "$cfg"
+
+      - name: Compile board device tree
+        run: dtc -I dts -O dtb -o buildroot/output/images/bw21.dtb bw21.dts
+
+      - name: Archive build evidence
+        if: always()
+        run: |
+          mkdir -p evidence
+          cfg=$(find buildroot/output/build -path '*/linux-*/.config' -print -quit)
+          if [ -n "$cfg" ]; then cp "$cfg" evidence/kernel.config; fi
+          cp buildroot/.config evidence/buildroot.config
+          git -C buildroot rev-parse HEAD > evidence/buildroot-revision.txt
+          git -C mini-rv32ima rev-parse HEAD > evidence/mini-rv32ima-revision.txt
+          printf 'run=%s\nsha=%s\nhardware_verified=false\n' "$GITHUB_RUN_ID" "$GITHUB_SHA" > evidence/status.txt
+          for image in Image bw21.dtb; do
+            if [ -f "buildroot/output/images/$image" ]; then
+              (cd buildroot/output/images && sha256sum "$image") >> evidence/SHA256SUMS
+            fi
+          done
+
+      - name: Export Linux host SDK
+        run: make -C buildroot sdk
 
       - name: List images
         if: always()
@@ -65,13 +104,23 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: bw21-linux-image
-          path: buildroot/output/images/Image
-          if-no-files-found: warn
+          path: |
+            buildroot/output/images/Image
+            buildroot/output/images/bw21.dtb
+          if-no-files-found: error
 
       - name: Upload used kernel .config
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: kernel-config-used
-          path: buildroot/output/build/linux-*/.config
-          if-no-files-found: warn
+          path: evidence/
+          if-no-files-found: error
+
+      - name: Upload Linux host SDK
+        uses: actions/upload-artifact@v4
+        with:
+          name: bw21-linux-host-sdk
+          path: buildroot/output/images/*_sdk-buildroot.tar.gz
+          compression-level: 0
+          if-no-files-found: error
